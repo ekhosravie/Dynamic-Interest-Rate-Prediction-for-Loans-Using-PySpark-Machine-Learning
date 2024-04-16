@@ -1,0 +1,83 @@
+from pyspark.sql import SparkSession
+from pyspark.ml.feature import VectorAssembler, StringIndexer, OneHotEncoder
+from pyspark.ml.regression import RandomForestRegressor
+from pyspark.ml import Pipeline
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.sql.functions import col, when
+
+# Create a Spark session
+spark = SparkSession.builder.appName("DynamicPricing").getOrCreate()
+
+# Sample banking dataset
+data = [
+    (1, 25, 'CreditCard', 'High', 'Low', 500, 1000, 15),
+    (2, 35, 'Loan', 'Medium', 'Medium', 10000, 20000, 25),
+    (3, 45, 'Mortgage', 'Low', 'High', 200000, 300000, 30),
+]
+
+columns = ['customer_id', 'age', 'product_type', 'risk_profile', 'demand', 'current_price', 'max_price', 'interest_rate']
+
+df = spark.createDataFrame(data, columns)
+
+# Data preprocessing
+categorical_features = ['product_type', 'risk_profile', 'demand']
+numeric_features = ['age', 'current_price', 'max_price']
+
+# Convert categorical features to numerical using StringIndexer and OneHotEncoder
+indexers = [StringIndexer(inputCol=column, outputCol=column+"_index") for column in categorical_features]
+encoder = OneHotEncoder(inputCols=[indexer.getOutputCol() for indexer in indexers], outputCols=[f"{col}_encoded" for col in categorical_features])
+
+# Assemble all features into a single vector
+assembler = VectorAssembler(inputCols=['age'] + [f"{col}_encoded" for col in categorical_features] + numeric_features, outputCol="features")
+
+# Create a Random Forest regression model
+rf = RandomForestRegressor(featuresCol='features', labelCol='interest_rate', numTrees=10, maxDepth=5)
+
+# Create a pipeline
+pipeline = Pipeline(stages=indexers + [encoder, assembler, rf])
+
+# Train the model
+model = pipeline.fit(df)
+
+# Generate hypothetical new data for pricing prediction
+new_data = [
+    (5, 28, 'Loan', 'High', 'Low', 15000, 25000, 20),
+    (6, 40, 'Mortgage', 'Medium', 'Medium', 180000, 280000, 35),
+    (7, 22, 'CreditCard', 'Low', 'High', 800, 1200, 12),
+    (8, 33, 'Loan', 'High', 'Low', 12000, 22000, 22),
+    (9, 50, 'Mortgage', 'Low', 'Medium', 250000, 350000, 28),
+    (10, 29, 'CreditCard', 'Medium', 'Medium', 700, 1100, 18),
+    (11, 37, 'Loan', 'Low', 'High', 13000, 23000, 24),
+    (12, 48, 'Mortgage', 'Medium', 'Low', 220000, 320000, 32),
+    (13, 26, 'CreditCard', 'High', 'Medium', 550, 1050, 16),
+    (14, 42, 'Loan', 'Medium', 'High', 16000, 26000, 26),
+    (15, 55, 'Mortgage', 'High', 'Low', 280000, 380000, 38),
+    (16, 31, 'CreditCard', 'Low', 'Medium', 650, 1150, 14),
+    (17, 39, 'Loan', 'High', 'Medium', 14000, 24000, 23),
+    (18, 47, 'Mortgage', 'Low', 'Low', 240000, 340000, 29),
+    (19, 27, 'CreditCard', 'Medium', 'High', 600, 1000, 17),
+    (20, 43, 'Loan', 'Low', 'Medium', 17000, 27000, 27),
+    (21, 52, 'Mortgage', 'Medium', 'High', 260000, 360000, 33),
+    (22, 32, 'CreditCard', 'High', 'Low', 700, 1100, 19),
+    (23, 38, 'Loan', 'Medium', 'Low', 15000, 25000, 25),
+    (24, 46, 'Mortgage', 'Low', 'Medium', 230000, 330000, 31),
+    (25, 29, 'CreditCard', 'High', 'High', 600, 1000, 20),
+    (26, 41, 'Loan', 'Medium', 'Low', 17000, 27000, 26),
+    (27, 56, 'Mortgage', 'Low', 'High', 290000, 390000, 39),
+    (28, 33, 'CreditCard', 'Medium', 'Medium', 750, 1150, 15),
+    (29, 40, 'Loan', 'High', 'Medium', 18000, 28000, 24),
+    (30, 48, 'Mortgage', 'Low', 'Low', 250000, 350000, 30)
+]
+
+new_df = spark.createDataFrame(new_data, columns)
+
+# Make pricing predictions using the trained model
+predictions = model.transform(new_df)
+
+# Adding a column to classify predictions as 'High', 'Medium', or 'Low' based on interest rate
+
+predictions = predictions.withColumn("interest_rate_difference", col("prediction") - col("interest_rate"))
+evaluator = RegressionEvaluator(labelCol="interest_rate", predictionCol="interest_rate_difference", metricName="rmse")
+rmse = evaluator.evaluate(predictions)
+print("Root Mean Squared Error (RMSE) on test data =", rmse)
+predictions.select('customer_id', 'prediction', 'interest_rate_difference').show() 
